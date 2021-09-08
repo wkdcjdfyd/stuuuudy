@@ -1,3 +1,4 @@
+import json
 import os
 import requests
 import pandas as pd
@@ -15,7 +16,11 @@ HEADER = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHT
 def scraper(query):
     urls = []
     for page in range(10):
-        res = requests.get(BASE_URL + "query=" + query + "&where=news&ie=utf8&sm=nws_hty" + "&start=" + str(page*10 + 1), headers=HEADER)
+        try:
+            res = requests.get(BASE_URL + "query=" + query + "&where=news&ie=utf8&sm=nws_hty" + "&start=" + str(page*10 + 1), headers=HEADER)
+        except requests.exceptions.RequestException as e:
+            raise SystemExit(e)
+
         soup = BeautifulSoup(res.text, "html.parser")
 
         select = soup.find_all(class_="info_group")
@@ -30,7 +35,10 @@ def scraper(query):
 
     for url in urls:
         print(url)
-        res = requests.get(url, headers=HEADER)
+        try:
+            res = requests.get(url, headers=HEADER)
+        except requests.exceptions.RequestException as e:
+            raise SystemExit(e)
         soup = BeautifulSoup(res.text, "html.parser")
         oid = url.split("oid=")[1].split("&")[0]
         aid = url.split("aid=")[1]
@@ -48,50 +56,60 @@ def scraper(query):
         try:
             news["press"] = soup.find(class_="journalistcard_summary_press").find("img")["alt"]
         except AttributeError:      # 언론사가 위치한 곳에 없을 경우 로고 이미지로 접근해서 가져옴
-            news["press"] = soup.find(class_="press_logo").find("img")["title"]
+            try:
+                news["press"] = soup.find(class_="press_logo").find("img")["title"]
+            except AttributeError:
+                news["press"] = None
 
         try:
             news["journalist"] = soup.find(class_="journalistcard_summary_name").text
         except AttributeError:      # 기자 이름이 위치한 곳에 없을 경우
-            news["journalist"] = soup.find(class_="b_text").text.strip()
+            try:
+                news["journalist"] = soup.find(class_="b_text").text.strip()
+            except AttributeError:
+                news["journalist"] = None
 
         header = HEADER
         header["referer"] = url
         c_url = COMMENT_URL + "&objectId=news" + oid + "%2C" + aid + "&page=" + str(page)
-        comment_res = requests.get(c_url, headers=HEADER)
+        try:
+            comment_res = requests.get(c_url, headers=HEADER)
+        except requests.exceptions.RequestException as e:
+            raise SystemExit(e)
 
         comment = comment_res.text.replace("jQuery112401841839960753442_1630905379082(", "").replace(");", "")
-        comment = comment.replace("true", "True").replace("null", "None").replace("false", "False")
-        comment = eval(comment)
-        news["comment_num"] = comment["result"]["count"]["comment"]
+        comment = json.loads(comment)
+        news["comment_num"] = int(comment["result"]["count"]["comment"])
 
         r_url = REACTION_URL + "q=NEWS%5Bne_" + parm + "%5D%7CNEWS_SUMMARY%5B" + parm + "%5D%7CJOURNALIST%5B56635(period)%5D%7CNEWS_MAIN%5Bne_" + parm + "%5D"
-        reaction_res = requests.get(r_url, headers=HEADER)
+        try:
+            reaction_res = requests.get(r_url, headers=HEADER)
+        except requests.exceptions.RequestException as e:
+            raise SystemExit(e)
 
         reaction = reaction_res.text.replace("/**/jQuery112407839462533429615_1630909363366(", "").replace(");", "")
-        reaction = reaction.replace("true", "True").replace("null", "None").replace("false", "False")
-        reaction = eval(reaction)
+        reaction = json.loads(reaction)
 
-        news["angry"] = "0"
-        news["warm"] = "0"
-        news["like"] = "0"
-        news["want"] = "0"
-        news["sad"] = "0"
+        news["angry"] = 0
+        news["warm"] = 0
+        news["like"] = 0
+        news["want"] = 0
+        news["sad"] = 0
 
         for i in reaction["contents"][0]["reactionMap"]:
             reaction_name = reaction["contents"][0]["reactionMap"][i]["reactionTypeCode"]["name"]
-            reaction_num = reaction["contents"][0]["reactionMap"][i]["count"]
+            reaction_num = int(reaction["contents"][0]["reactionMap"][i]["count"])
             news[reaction_name] = reaction_num
 
         now = time.localtime()
         news["time"] = "%04d/%02d/%02d %02d:%02d:%02d" % (now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec)
 
         result.append(news)
-        df = pd.DataFrame(result)
-        title = query + "_news.csv"
-        df.to_csv(title, sep=",", index=True, encoding="utf-8-sig")
+
+    df = pd.DataFrame(result)
+    title = query + "_news.csv"
+    df.to_csv(title, sep=",", index=True, encoding="utf-8-sig")
 
 
 if __name__ == '__main__':
-    query = input()
-    scraper(query)
+    scraper("카카오")
